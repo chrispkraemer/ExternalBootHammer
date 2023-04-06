@@ -8,6 +8,7 @@
 using namespace std;
 
 string printOption(Option o);
+unsigned int generateBL(unsigned int target_addr, unsigned int current_addr);
 void bracket3Regs(Register r1, Register r2, Register r3);
 void bracket2RegsImm(Register r1, Register r2, unsigned imm);
 void regList(unsigned bits);
@@ -22,6 +23,7 @@ void printInstr(Instruction i);
 void checkIfThenInstr();
 void printHex();
 void printByte(unsigned b);
+void insertTrampoline();
 string printRegister(Register r);
 vector<Instruction> program;
 vector<string> eofInstrs;
@@ -31,26 +33,45 @@ string ifThenModifier = "";
 short int ifThenNumber = 0;
 
 
+bool disas = false;
+bool hexout = false;
+bool trampoline = false;
 
 
 int main(int argc, char** argv){
 
 	string filename;
 
-	filename = argv[1];
+    for(int i = 1; i < argc; i++){
+        if(string(argv[i]) == "-disas"){
+            disas = true;
+        } else if(string(argv[i]) == "-hex"){
+            hexout = true;
+        } else if(string(argv[i]) == "-t"){
+            trampoline = true; 
+        } else if(string(argv[i]) == "-f"){
+            filename = argv[i + 1];
+            i++;
+        } else {
+            cout << "argument not recognized\n";
+            return 0;
+        }
+    }
 
-	//cout << endl << filename << ": file format ihex" <<  endl << endl << endl;
 
 	fstream fileStream;
 	fileStream.open(filename);
 
 	string line;
 
-    //cout << "Disassembly of section .sec1:" << endl << endl;
 
 	int instrAddr = 0x2000;
-    //cout << "0000" << hex << instrAddr << " <.sec1>:" << endl;
 
+    if(disas){
+        cout << endl << filename << ": file format ihex" <<  endl << endl << endl;
+        cout << "Disassembly of section .sec1:" << endl << endl;
+        cout << "0000" << hex <<  instrAddr << " <.sec1>:" << endl;
+    }
 	unsigned halfword;
 	unsigned opcodeWordOrHalfWord;
 	bool is32 = 0;
@@ -67,7 +88,7 @@ int main(int argc, char** argv){
 					if(is32){
 						halfword2 = stol(instruction, nullptr, 16);
 						//... blah blah blah
-						Instruction myInst;
+						Instruction myInst(0,0);
 						word = (halfword << 16) | halfword2;
 						myInst.addr = instrAddr;
 						//cout << "halfword1: " << hex << halfword << " halfword2: " << hex << hallword2 << " " << hex << word << endl;
@@ -91,7 +112,7 @@ int main(int argc, char** argv){
 							
 						} else {
 							//is a 16 bit instruction, go ahead and decode
-							Instruction myInst;
+							Instruction myInst(0,0);
 							myInst.addr = instrAddr;
 							myInst.decodeInstr16(halfword);
 							instrAddr+=0x02;
@@ -108,11 +129,145 @@ int main(int argc, char** argv){
             eofInstrs.push_back(line); //add anything thats not record type 00 (data)
 		}
 	}
-	//printProgram();
-    //cout << "\n\n\n\n\n\n";
+    if(disas){
+        printProgram();
+    }
+    if(trampoline){
+        insertTrampoline();
+    }
+    if(hexout){
+        printHex();
+    }
+
+
+}
+
+unsigned int generateBL(unsigned int target_addr, unsigned int current_addr){
+    // SHOULD INSERT SOME BOUNDS CHECKING
+    int imm32 = target_addr - current_addr - 4;
+    unsigned int imm11,imm10, output;
+    bool I2, I1, S, J1, J2; // GOT TO DEAL WITH the sign extension somehow, I think that is the problem
+    imm11 = (imm32 >> 1) & 0b11111111111;
+    imm10 = (imm32 >> 12) & 0x3ff;
+    //imm10 = 0b0000000000;
+    I2 = (imm32 >> 22) & 0b1;
+    I1 = (imm32 >> 23) & 0b1;
+    S = (imm32 >> 24) & 0b1;
+    J2 = !(I2) ^ S;
+    J1 = !(I1) ^ S;
+    output = 0xf;
+    output = output << 1;
+    output = output | 0; //ya I know, will remove later
+    output = output << 1;
+    output = output | S;
+    output = output << 10;
+    output = output | imm10;
+    output = output << 2;
+    output = output | 0b11;
+    output = output << 1;
+    output = output | J1;
+    output = output << 1;
+    output = output | 0b1;
+    output = output << 1;
+    output = output | J2;
+    output = output << 11;
+    output = output | imm11;
+
+    return output;
+}
+
+//make a function that takes in an BL Instruction, probably a reference, and changes the bytecode so it will jump to an input target addr
+
+//hmmmmmmmmmmm this seems like something that should be put in instruction.cpp!!!!!!!!!!!!
+void insertTrampoline(){
+    vector<Instruction> mainbranches;
+    for(int i = 0; i < program.size(); i++){
+        if(program[i].name == InstrType::BL && program[i].is32){ //could also look for ::B
+            if(mainbranches.size() && (mainbranches.back().addr + 0x4) != program[i].addr){
+                //clear
+                mainbranches.clear();
+                mainbranches.push_back(program[i]);
+            } else {
+                mainbranches.push_back(program[i]);
+            }
+            if(mainbranches.size() >= 4){
+                break;
+            }
+        }
+    }
+
+/*
+    for(int i = 0; i < mainbranches.size(); i++){
+        cout << hex << mainbranches[i].addr << ", " << mainbranches[i].bytecode << ", ";
+        printInstr(mainbranches[i]);
+    }
+
+*/
+    /*
+    target addr, current addr
+    imm32 = signextend(s:I1:I2:imm10:imm11:0, 32)
+    jumpaddr = currentadr + imm32
+    imm32 = target_addr - current_addr
+    target_addr = 0x2620 digital write
+    target_addr = 0x22b0 delay
+    */
+
+    unsigned int jumptoendaddr = program.back().addr + 0x2;
+    //cout << "last addr: " << hex << program.back().addr << endl;
+    unsigned int nextaddr = program.back().addr + 0x2;
+    Instruction push(nextaddr,0);
+    push.decodeInstr16(0xb570);
+    program.push_back(push);
+    program.push_back(Instruction(nextaddr+=2,0x24fa));
+    program.back().decodeInstr16(0x24fa);
+    program.push_back(Instruction(nextaddr+=2,0x4d08));
+    program.back().decodeInstr16(0x4d08);
+    program.push_back(Instruction(nextaddr+=2,0x2101)); //movs r1, #1
+    program.back().decodeInstr16(0x2101);
+    program.push_back(Instruction(nextaddr+=2,0x6828));
+    program.back().decodeInstr16(0x6828);
+    program.push_back(Instruction(nextaddr+=2,0x00a4));
+    program.back().decodeInstr16(0x00a4);
+    program.push_back(Instruction(nextaddr+=2,0xf000fa80));
+    program.back().decodeInstr32(generateBL(0x2620, nextaddr));
+    program.push_back(Instruction(nextaddr+=4,0x0020));
+    program.back().decodeInstr16(0x0020);
+    program.push_back(Instruction(nextaddr+=2,0xf000f8c5));
+    program.back().decodeInstr32(generateBL(0x22b0, nextaddr));
+    program.push_back(Instruction(nextaddr+=4,0x6828));
+    program.back().decodeInstr16(0x6828);
+    program.push_back(Instruction(nextaddr+=2,0x2101));
+    program.back().decodeInstr16(0x2100);
+    program.push_back(Instruction(nextaddr+=2,0xf000fa79));
+    program.back().decodeInstr32(generateBL(0x2620, nextaddr));
+    program.push_back(Instruction(nextaddr+=4,0x0020));
+    program.back().decodeInstr16(0x0020);
+    program.push_back(Instruction(nextaddr+=2,0xf000f8be));
+    program.back().decodeInstr32(generateBL(0x22b0, nextaddr));
+    program.push_back(Instruction(nextaddr+=4,0xbd70));
+    program.back().decodeInstr16(0xbd70);
+    program.push_back(Instruction(nextaddr+=2,0x46c0));
+    program.back().decodeInstr16(0x46c0);
+    program.push_back(Instruction(nextaddr+=2,0x0000));
+    program.back().decodeInstr16(0x0000);
+    program.push_back(Instruction(nextaddr+=2,0x2000));
+    program.back().decodeInstr16(0x2000);
+    program.push_back(Instruction(nextaddr+=2,0x0000));
+    program.back().decodeInstr16(0x0000);
+    program.push_back(Instruction(nextaddr+=2,0x0000));
+    program.back().decodeInstr16(0x0000);
+
+
+
+    // now change original jump
+    for(int i = 0; i < program.size(); i++){
+        if(program[i].addr == 0x2ebe){
+            program[i].decodeInstr32(generateBL(jumptoendaddr,program[i].addr));
+            break;
+        }
+    }
+
     printHex();
-
-
 }
 
 
@@ -124,7 +279,7 @@ void decode(string instruction, int addr){
 	//instructions are weird. You human read them differently from how the machine reads them.
 	unsigned singleOrDoubleInstr = bytecode >> 11;
 	singleOrDoubleInstr = singleOrDoubleInstr & 0x1F;
-	Instruction myInst1,myInst2; 
+	Instruction myInst1(0,0),myInst2(0,0); 
 	if(singleOrDoubleInstr == 0b11101 || singleOrDoubleInstr == 0b11110 || singleOrDoubleInstr == 0b11111){
 		//this is a 32 bit instruction
 		myInst1.addr = addr;
@@ -169,6 +324,9 @@ void printHex(){
         currentBytecode = program[i].bytecode;
         int j = 16;
         while(j > 0){
+            if(i >= program.size()){
+                break; //uggghhh even more grose
+            }
             if(program[i].is32){
                 //print32inst
                 checksum += ((program[i].bytecode >> 16) & 0xff) + ((program[i].bytecode >> 24) & 0xff);

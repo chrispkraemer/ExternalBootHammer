@@ -153,7 +153,7 @@ class Instruction {
         Option opt = Option::no_option;
 		unsigned imm = 0; //can trim this down later, slighly inefficient to have imm and jumpaddr, they can be saved in the same space
 		unsigned int jumpaddr = 0;
-		Instruction();
-
+        Instruction(unsigned addr, unsigned int bytecode);
+		Instruction(InstrType name, unsigned addr, unsigned int bytecode);
 };
 

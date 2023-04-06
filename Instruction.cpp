@@ -6,11 +6,21 @@
 using namespace std;
 
 
-Instruction::Instruction(){
-	name = InstrType::nop;
-	bytecode = 0;
-	jumpaddr = 0;
+
+
+Instruction::Instruction(unsigned addr, unsigned int bytecode){
+    this->name = InstrType::nop;
+    this->bytecode = bytecode;
+    this->addr = addr;
 }
+
+
+Instruction::Instruction(InstrType name, unsigned addr, unsigned int bytecode){
+	this->name = name; 
+	this->bytecode = bytecode;
+	this->addr = addr;
+}
+
 
 void Instruction::decodeInstr(string textOfInstruction){
 	unsigned long long bytecode = stoi(textOfInstruction,nullptr,16);
