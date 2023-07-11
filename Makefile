@@ -7,8 +7,11 @@ TESTDIRS= $(shell ls -d testprograms_hex/*)
 
 all: main 
 
-main: Instruction.o boothammer.o 
-	$(CXX) boothammer.o Instruction.o -o hexBootHammer
+main: Instruction.o boothammer.o Function.o
+	$(CXX) boothammer.o Instruction.o Function.o -o hexBootHammer
+
+Function.o: Function.cpp
+	$(CXX) -c -g Function.cpp
 
 Instruction.o: Instruction.cpp
 	$(CXX) -c -g Instruction.cpp

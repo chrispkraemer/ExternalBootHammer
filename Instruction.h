@@ -152,7 +152,7 @@ class Instruction {
 		Condition cond = Condition::none;
         Option opt = Option::no_option;
 		unsigned imm = 0; //can trim this down later, slighly inefficient to have imm and jumpaddr, they can be saved in the same space
-		unsigned int jumpaddr = 0;
+		unsigned int alignedAddr = 0;
         Instruction(unsigned addr, unsigned int bytecode);
 		Instruction(InstrType name, unsigned addr, unsigned int bytecode);
 };

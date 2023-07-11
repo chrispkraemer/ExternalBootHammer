@@ -416,8 +416,16 @@ void Instruction::decodeInstr16(unsigned long bytecode){
 		this->hasImm = true;
 		this->imm = ((bytecode & 0xff) << 2);// + this->addr + 0x2; // need to shift this to make it a biggert number!!!!!!!!!!!!!!
 		this->Rd = static_cast<Register>((bytecode >> 8) & 0b111);
-		this->Rn = Register::pc; 
-	} else if((opcode >> 2 == 0b0101) || (opcode >> 3 == 0b011) ||
+        this->Rn = Register::pc; 
+        //align(PC, 4)
+        unsigned alignedAddr = 0;
+        if(this->addr % 4 == 0){
+            alignedAddr = this->addr + 4 + this->imm;
+        } else {
+            alignedAddr = this->addr + (this->addr % 4) + this->imm;
+        }
+        this->alignedAddr = alignedAddr;
+    } else if((opcode >> 2 == 0b0101) || (opcode >> 3 == 0b011) ||
 			(opcode >> 3 == 0b100)){
 		//Load/store single data item
 		unsigned opA = (bytecode >> 12) & 0xf;
