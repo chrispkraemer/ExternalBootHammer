@@ -21,6 +21,11 @@ Instruction::Instruction(InstrType name, unsigned addr, unsigned int bytecode){
 	this->addr = addr;
 }
 
+void Instruction::hide(){
+    this->name = InstrType::HIDDEN;
+
+}
+
 
 void Instruction::decodeInstr(string textOfInstruction){
 	unsigned long long bytecode = stoi(textOfInstruction,nullptr,16);
@@ -751,8 +756,8 @@ void Instruction::decodeInstr16(unsigned long bytecode){
 			this->imm = this->addr + this->imm + 4;
 		}
 	} else {
-		cout << "error not correct opcode: " << bitset<16>(bytecode) << ", " << hex << bytecode << "at addr: " << hex << this->addr << endl;
-		this->name = InstrType::nop;
+		//cout << "error not correct opcode: " << bitset<16>(bytecode) << ", " << hex << bytecode << "at addr: " << hex << this->addr << endl;
+		this->name = InstrType::CONST;
 	}
 }
 

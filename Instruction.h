@@ -99,7 +99,9 @@ enum InstrType {
     DSB,
     ISB,
     MRS,
-    MSR 
+    MSR,
+    CONST,
+    HIDDEN
 
 };
 
@@ -140,6 +142,7 @@ class Instruction {
 		void decodeInstr16(unsigned long bytecode);
 		void decodeInstr32(unsigned long bytecode);
 		unsigned int encodeInstr(Instruction Instr);
+        void hide();
 
 		InstrType name = InstrType::nop;
 		unsigned addr = 0;

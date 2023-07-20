@@ -6,14 +6,18 @@
 #include <bitset>
 #include <signal.h>
 #include "Function.h"
+#include <set>
 
 using namespace std;
 
+void addUserChecks(Function* func, set<int>*checkSet);
+void runOnFunction();
+void fillChildFunction(Function* func, int startAddr);
 void fillFunction(Function* func, int startAddr);
 void printByFunction();
 void controlFlow();
 string printOption(Option o);
-int getProgramIndex(unsigned int addr);
+int getProgramIndex(unsigned int addr, int min, int max);
 unsigned int generateBL(unsigned int target_addr, unsigned int current_addr);
 void bracket3Regs(Register r1, Register r2, Register r3);
 void bracket2RegsImm(Register r1, Register r2, unsigned imm);
@@ -40,6 +44,8 @@ int fw = 12;
 short int yesHex = 32;
 string ifThenModifier = "";
 short int ifThenNumber = 0;
+Instruction* branchToSetup;
+Instruction* branchToLoop;
 
 
 bool disas = false;
@@ -100,30 +106,50 @@ int main(int argc, char** argv){
 					if(is32){
 						halfword2 = stol(instruction, nullptr, 16);
 						//... blah blah blah
-						Instruction myInst(0,0);
-						word = (halfword << 16) | halfword2;
-						myInst.addr = instrAddr;
-						//cout << "halfword1: " << hex << halfword << " halfword2: " << hex << hallword2 << " " << hex << word << endl;
-						myInst.decodeInstr32(word);
-						instruction = "";
-						halfword2 = 0;
-						halfword = 0;
-						instrAddr += 0x04;
-						program.push_back(myInst);
-						is32 = false;
-
-					} else {
-						halfword = stol(instruction,nullptr, 16);
-						opcodeWordOrHalfWord = halfword >> 11;
-						//opcodeWordOrHalfWord = opcodeWordOrHalfWord & 0x1F;
-						if(opcodeWordOrHalfWord == 0b11101 || opcodeWordOrHalfWord == 0b11110 || opcodeWordOrHalfWord == 0b11111){
-							//is a 32 bit instruction, read next halfword
-							is32 = true;
+                        if(halfword >> 11 != 0b11110){
+                            Instruction const1(0,0);
+                            Instruction const2(0,0);
+                            const1.addr = instrAddr;
+                            const1.decodeInstr16(halfword);
+                            instrAddr+= 0x2;
+                            const2.addr = instrAddr;
+                            const2.decodeInstr16(halfword2);
+                            instrAddr+=0x2;
+                            halfword = 0;
+                            halfword2 = 0;
+                            program.push_back(const1);
+                            program.push_back(const2);
+                            is32 = false;
 							instruction = "";
-							//need to get another byte, so go around the loop again
-							
-						} else {
-							//is a 16 bit instruction, go ahead and decode
+                        } else {
+
+                            Instruction myInst(0,0);
+                            word = (halfword << 16) | halfword2;
+                            myInst.addr = instrAddr;
+                            //cout << "halfword1: " << hex << halfword << " halfword2: " << hex << hallword2 << " " << hex << word << endl;
+                            myInst.decodeInstr32(word);
+                            instruction = "";
+                            halfword2 = 0;
+                            halfword = 0;
+                            instrAddr += 0x04;
+                            program.push_back(myInst);
+                            is32 = false;
+                        }
+
+                    } else {
+                        halfword = stol(instruction,nullptr, 16);
+                        opcodeWordOrHalfWord = halfword >> 11;
+                        //opcodeWordOrHalfWord = opcodeWordOrHalfWord & 0x1F;
+                        if(opcodeWordOrHalfWord == 0b11101 || opcodeWordOrHalfWord == 0b11110 || opcodeWordOrHalfWord == 0b11111){
+                            //is a 32 bit instruction, read next halfword
+                            //ugly hack but needs to be done, in future figure out constants at decode time
+                            //if(opcodeWordOrHalfWord == 0b11111){
+                            is32 = true;
+                            instruction = "";
+                            //need to get another byte, so go around the loop again
+
+                        } else {
+                            //is a 16 bit instruction, go ahead and decode
 							Instruction myInst(0,0);
 							myInst.addr = instrAddr;
 							myInst.decodeInstr16(halfword);
@@ -141,18 +167,23 @@ int main(int argc, char** argv){
             eofInstrs.push_back(line); //add anything thats not record type 00 (data)
 		}
 	}
-    controlFlow();
-    if(disas){
-        printProgram();
-    }
     if(trampoline){
         insertTrampoline();
+    }
+    if(funcOut){
+        controlFlow();
+        runOnFunction();
+        
     }
     if(hexout){
         printHex();
     }
-    if(funcOut){
-        printByFunction();
+    if(disas){
+        if(funcOut){
+            printByFunction();
+        } else {
+            printProgram();
+        }
     }
 
 
@@ -173,7 +204,7 @@ unsigned int generateBL(unsigned int target_addr, unsigned int current_addr){
     // SHOULD INSERT SOME BOUNDS CHECKING
     int imm32 = target_addr - current_addr - 4;
     if(current_addr > target_addr){
-        imm32 = imm32 - 2;
+        //imm32 = imm32 - 2;
     }
     //imm32 = imm32 >> 1;
     unsigned int imm11,imm10, output;
@@ -226,6 +257,8 @@ void controlFlow(){
         }
     }
 
+    branchToSetup = mainbranches[1];
+    branchToLoop = mainbranches[2];
 
     //build main, setup, loop, writeRAM, and readRAM functions
     Function *main = new Function("main");
@@ -263,12 +296,12 @@ void controlFlow(){
     Function *loop = new Function("loop");
 
 
-    int setupAddr = getProgramIndex(mainbranches[1]->imm);
+    int setupAddr = getProgramIndex(mainbranches[1]->imm, 0, program.size());
     //cout << hex << setupAddr << endl;
     fillFunction(setup, setupAddr);
     functions.push_back(*setup);
 
-    int loopAddr = getProgramIndex(mainbranches[2]->imm);
+    int loopAddr = getProgramIndex(mainbranches[2]->imm, 0, program.size());
     fillFunction(loop, loopAddr);
     functions.push_back(*loop);
 
@@ -278,12 +311,25 @@ void controlFlow(){
 void fillFunction(Function* func, int startAddr){
     int pos = startAddr;
     int lastAddr = 0;
-    while(program[pos].name != InstrType::POP){
+    int pushcount = 0;
+    while(program[pos].name != InstrType::POP && program[pos].name != InstrType::BX){
         if(program[pos].name == InstrType::LDR){
             if(program[pos].Rn == Register::pc){
                 if(program[pos].alignedAddr > lastAddr){
                     lastAddr = program[pos].alignedAddr;
                 }
+            }
+        } else if(program[pos].name == InstrType::BL){
+            int newchildIndex = getProgramIndex(program[pos].imm, 0, program.size());
+            Function *newchild = new Function(to_string(newchildIndex));
+            func->children.push_back(newchild);
+            fillChildFunction(newchild, newchildIndex);
+
+        } else if(program[pos].name == InstrType::PUSH){
+            pushcount++;
+            if(pushcount >= 2){
+                return;
+
             }
         }
         func->body.push_back(&program[pos]);
@@ -298,7 +344,89 @@ void fillFunction(Function* func, int startAddr){
 
 }
 
-int getProgramIndex(unsigned int addr){
+//Seriously consider redoing the underlying data structure if I get some time. I think
+// a hash map of addresses would work well, well maybe not, to keep with the idea of low
+// overhead, a hash map would not be the best
+//currently I am building functions from program, when a program should be made of functions
+/*
+
+    program: vector[Function*]
+    Functions: vector[Instruction*], vector[Function*]
+    Instruction: the god damn instruction
+
+    NEED TO DO SOME RESTRUCTUREINGGGGGGGGGGGG
+
+
+*/
+
+void fillChildFunction(Function* func, int startAddr){
+    int pos = startAddr;
+    int lastAddr = 0;
+    int pushcount = 0; //in case there is a function that has a push but no pop(while(1))
+    while(program[pos].name != InstrType::POP && program[pos].name != InstrType::BX){
+        if(program[pos].name == InstrType::LDR){
+            if(program[pos].Rn == Register::pc){
+                if(program[pos].alignedAddr > lastAddr){
+                    lastAddr = program[pos].alignedAddr;
+                }
+            }
+        } else if(program[pos].name == InstrType::BL){
+            int newchildIndex = getProgramIndex(program[pos].imm, 0, program.size());
+            Function *newchild = new Function(to_string(newchildIndex));
+            func->children.push_back(newchild);
+            fillChildFunction(newchild, newchildIndex);
+
+        } else if(program[pos].name == InstrType::PUSH){
+            pushcount++;
+            if(pushcount >= 2){
+                return; //ugly but weird bug when a function has a never ending loop
+            }
+        }
+        //the compiler is optimizing out the leaving of a func if it knows
+        /*
+            that a function goes into and stays in a while loop, see elffirst.S,
+            loop calls myfunc, but no pop or bx, so it keeps going and what do you know,
+            loop is directly after myfunc in the program, literally, the address is right 
+            after, so then myfunc gets called again and we have an infinite loop
+            need to fix my while loop param above to quit after last addr
+
+            maybe check for an auto branch? Ugly by doable b/c I mapped conditions
+        */
+        func->body.push_back(&program[pos]);
+        pos++;
+    }
+    func->body.push_back(&program[pos]);
+    pos++;
+    while(program[pos].addr < lastAddr+2){
+        if(program[pos].bytecode == 0xdead){
+            if(program[pos+1].bytecode == 0xbeef){
+                func->name = "readRAM";
+                functions.push_back(*func);
+            }
+        } else if(program[pos].bytecode == 0xbeef){
+            if(program[pos+1].bytecode == 0xdead){
+                func->name = "writeRAM";
+                functions.push_back(*func);
+            }
+        }
+        func->body.push_back(&program[pos]);
+        pos++;
+    }
+         
+}
+
+int getProgramIndex(unsigned int addr, int min, int max){
+    unsigned int place = ((max + min)/2);
+    if(addr == program[place].addr){
+        return place;
+    } else{
+        if(addr > program[place].addr){
+            return getProgramIndex(addr, place, max);
+        } else {
+            return getProgramIndex(addr, min, place);
+        }
+    }
+    /*
     unsigned int place = addr - 0x2000;
     if(addr >= program[place].addr){
         while(addr != program[place].addr){
@@ -310,11 +438,185 @@ int getProgramIndex(unsigned int addr){
         }
     }
     return place;
+    */
 }
 
 //make a function that takes in an BL Instruction, probably a reference, and changes the bytecode so it will jump to an input target addr
 
-//hmmmmmmmmmmm this seems like something that should be put in instruction.cpp!!!!!!!!!!!!
+//need to make functions vector a set or hashmap, would look and perform better
+void addUserChecks(Function* func, set<int>*checkSet){
+    if(func->name == "readRAM" || func->name == "writeRAM"){
+        return;
+    }
+    for(int i = 0; i < func->body.size(); i++){
+        if(func->body[i]->bytecode == 0x46c0){
+            if(func->body[i+1]->bytecode == 0x46c0){
+                checkSet->insert(getProgramIndex(func->body[i]->addr, 0 , program.size()));
+                if(func->name != "loop"){
+                    functions.push_back(*func);
+                }
+            }
+
+        }
+    }
+    for(int j = 0; j < func->children.size(); j++){
+        addUserChecks(func->children[j], checkSet);
+
+    }
+
+}
+
+
+
+void runOnFunction(){
+    bool addCheckpoints = false;
+    unsigned int writeRAMAddr = 0;
+    unsigned int readRAMAddr = 0;
+    unsigned int write32Addr = 0;
+    unsigned int read32Addr = 0;
+    unsigned int jumptoReadIndex = 0;
+    unsigned int readToWriteJumpIndex = 0;
+    unsigned int readToWriteJumpAddr = 0;
+    bool foundfirst = false;
+    set<int> userDefChecks; //add children search and branches to trampoline!!!!!!!!!!!
+    int len = program.size();
+    for(int i = 0; i < functions.size(); i++){
+        if(functions[i].name == "setup"){
+            for(int j = 0; j < functions[i].body.size(); j++){
+                if(functions[i].body[j]->bytecode == 0x46c0){
+                    if(functions[i].body[j+1]->bytecode == 0x46c0){
+                        if(!foundfirst){
+                            addCheckpoints = true;
+                            jumptoReadIndex = getProgramIndex(functions[i].body[j]->addr, 0, len);
+                            foundfirst = true;
+                        } else {
+                            userDefChecks.insert(getProgramIndex(functions[i].body[j]->addr, 0, len));
+                        }
+
+                    }
+                }
+            }
+            //FYI this is redundantly checking functions I've already been to
+            //Need to find a way to make and share unique functions
+            for(int j = 0; j < functions[i].children.size(); j++){
+
+                addUserChecks(functions[i].children[j], &userDefChecks);
+            }
+            //then depth first search of children and add to list of "trampolines"
+            //depthsearch()
+        } else if(functions[i].name == "writeRAM"){
+            writeRAMAddr = functions[i].body[0]->addr;
+            for(int j = 0; j < functions[i].body.size(); j++){
+                if(functions[i].body[j]->bytecode == 0x46c0){
+                    if(functions[i].body[j+1]->bytecode == 0x46c0){
+                        readToWriteJumpAddr = functions[i].body[j]->addr;
+                    }
+                }
+            }
+
+        } else if(functions[i].name == "readRAM"){
+            readRAMAddr = functions[i].body[0]->addr;
+            for(int j = 0; j < functions[i].body.size(); j++){
+                if(functions[i].body[j]->bytecode == 0x46c0){
+                    if(functions[i].body[j+1]->bytecode == 0x46c0){
+                        readToWriteJumpIndex = getProgramIndex(functions[i].body[j]->addr, 0, len);
+                    }
+                }
+            }
+
+        } else if(functions[i].name == "loop"){
+                addUserChecks(&functions[i], &userDefChecks);
+        }
+    }
+
+    if(!addCheckpoints){
+        printHex();
+        return;
+    }
+
+
+    if(!writeRAMAddr || !readRAMAddr || !jumptoReadIndex || !readToWriteJumpIndex || !readToWriteJumpAddr){
+        cout << "ReadRAM: " << hex << readRAMAddr << endl;
+        cout << "writeRAM: " << hex << writeRAMAddr << endl;
+        cout << "jumptoReadIndex: " << jumptoReadIndex << endl;
+        abort();
+    }
+
+    unsigned int jumptoendaddr = program.back().addr + 0x2;
+    int trampBegin = program.size();
+    unsigned int nextaddr = program.back().addr + 0x2;
+    unsigned int loopAndSaveAddr = nextaddr;
+    insertAndDecode(nextaddr, 0xb5ff);
+    nextaddr+=2;
+    insertAndDecode(nextaddr, generateBL(branchToLoop->imm, nextaddr)); //BL to loop
+    nextaddr+=4,
+    insertAndDecode(nextaddr, generateBL(writeRAMAddr, nextaddr)); //BL to writeRAM
+    insertAndDecode(nextaddr+=4, 0xbdff);
+    insertAndDecode(nextaddr+=2, 0x46c0);
+    insertAndDecode(nextaddr+=2, 0x46c0);
+
+    unsigned int restoreOrSetupAddr = nextaddr + 0x2;
+    insertAndDecode(nextaddr+=2, 0xb5ff);
+    nextaddr+=2;
+    insertAndDecode(nextaddr, generateBL(readRAMAddr, nextaddr));
+    insertAndDecode(nextaddr+=4, 0x2800);
+    insertAndDecode(nextaddr+=2, 0xd004);
+    nextaddr+=2;
+    insertAndDecode(nextaddr, generateBL(branchToLoop->addr, nextaddr)); //BL should be ok because the program will never leave main. may still want to adjust stack, could continuously grow
+    insertAndDecode(nextaddr+=4, 0x46c0);
+    insertAndDecode(nextaddr+=2, 0x46c0);
+    insertAndDecode(nextaddr+=2, 0xbdff);
+    insertAndDecode(nextaddr+=2, 0x46c0);
+    insertAndDecode(nextaddr+=2, 0x46c0);
+    insertAndDecode(nextaddr+=2, 0xe7f9);//switched this out for 2 instead of 4 b/c no branch
+    insertAndDecode(nextaddr+=2, 0x46c0);
+    insertAndDecode(nextaddr+=2, 0x46c0);
+    insertAndDecode(nextaddr+=2, 0xb5ff);//push everything, this is the tramp for checks 
+    unsigned int userTrampAddr = nextaddr;
+    nextaddr+=2;
+    insertAndDecode(nextaddr, generateBL(writeRAMAddr, nextaddr)); //BL to writeRAM
+    insertAndDecode(nextaddr+=4, 0xbdff);//pop everything but pc(so no jump!)
+    insertAndDecode(nextaddr+=2, 0x46c0);
+    //insertAndDecode(nextaddr+=2, 0x46c0);
+    //insertAndDecode(nextaddr+=2, 0x46c0);
+    //insertAndDecode(nextaddr+=2, 0x46c0);
+
+    //not sure what is wrong, something is up, try running the program some more in JLINKEXE, find bugs, profit
+
+
+    // now change original jump
+
+    //int loopaddr = getProgramIndex(mainbranches[1]->imm);
+    //cout << hex << program[loopaddr].addr << endl;
+    //mainbranches[1]->decodeInstr32(generateBL(restoreOrSetupAddr, mainbranches[1]->addr));
+    branchToLoop->decodeInstr32(generateBL(loopAndSaveAddr, branchToLoop->addr));
+    program[jumptoReadIndex].decodeInstr32(generateBL(restoreOrSetupAddr, program[jumptoReadIndex].addr));
+    //program.erase(program.begin()+jumptoReadIndex+1);
+    program[jumptoReadIndex+1].hide();
+    program[readToWriteJumpIndex].decodeInstr32(generateBL(readToWriteJumpAddr, program[readToWriteJumpIndex].addr));
+    //program.erase(program.begin()+readToWriteJumpIndex+1);
+    program[readToWriteJumpIndex+1].hide();
+    int removedNops = 2;
+    for(int checkLoc : userDefChecks){
+        program[checkLoc].decodeInstr32(generateBL(userTrampAddr, program[checkLoc].addr));
+        //program.erase(program.begin()+checkLoc+1);
+        //removedNops++;
+        program[checkLoc+1].hide();
+
+    }
+
+
+    checkAddrs();
+
+    Function* trampoline = new Function("trampoline");
+
+    int trampEnd = program.size();
+    for(int i = trampBegin - removedNops; i < trampEnd; i++){
+       trampoline->body.push_back(&program[i]);
+    }
+    functions.push_back(*trampoline);
+
+}
 void insertTrampoline(){
     vector<Instruction*> mainbranches;
     unsigned int writeRAMAddr = 0;
@@ -435,8 +737,8 @@ void insertTrampoline(){
     insertAndDecode(nextaddr+=2, 0xe7f9);//switched this out for 2 instead of 4 b/c no branch
     insertAndDecode(nextaddr+=2, 0x46c0);
     insertAndDecode(nextaddr+=2, 0x46c0);
-    insertAndDecode(nextaddr+=2, 0xb4ff);//push everything but lr
-    insertAndDecode(nextaddr+=2, 0xbcff);//pop everything but pc(so no jump!)
+    insertAndDecode(nextaddr+=2, 0xb5ff);//push everything
+    insertAndDecode(nextaddr+=2, 0xbdff);//pop everything 
     insertAndDecode(nextaddr+=2, 0x46c0);
     //insertAndDecode(nextaddr+=2, 0x46c0);
     //insertAndDecode(nextaddr+=2, 0x46c0);
@@ -482,7 +784,10 @@ void checkAddrs(){ //not working???
     try {
         unsigned int runningAddr = 0x2000;
         for(int i = 0; i < program.size(); i++){
-            if(program[i].addr != runningAddr){
+            if(program[i].name == HIDDEN){
+                continue;
+            }
+            else if(program[i].addr != runningAddr){
                 cout << "bad Addr at " << hex << program[i].addr << endl;
                 cout << "bytecode = " << hex << program[i].bytecode << endl;
                 cout << "\t previous instrs:\n";
@@ -559,37 +864,43 @@ void printHex(){
     unsigned currentBytecode = 0;
     unsigned checksum = 0;
     for(int i = 0; i < program.size(); ){
+        if(program[i].name == InstrType::HIDDEN){
+            i++;
+            continue;
+        }
         cout << ":10" << hex << program[i].addr << "00";
         checksum = 0x10 + (program[i].addr >> 8) + (program[i].addr & 0xff) + 0x00; // ya ya I know, helps me understand whats going on
         currentBytecode = program[i].bytecode;
         int j = 16;
         while(j > 0){
-            if(i >= program.size()){
-                break; //uggghhh even more grose
-            }
-            if(program[i].is32){
-                //print32inst
-                checksum += ((program[i].bytecode >> 16) & 0xff) + ((program[i].bytecode >> 24) & 0xff);
-                printByte((program[i].bytecode >> 16) & 0xff);
-                printByte((program[i].bytecode >> 24) & 0xff);
-                j-=2;
-                if(!j){ //ugly but whatever
-                    printByte((~(checksum % 256) + 1)&0xff);
-                    cout << "\n";
-                    cout << ":10" << (program[i].addr+2) << "00";
-                    checksum = 0x10 + ((program[i].addr+2) >> 8) + ((program[i].addr+2) & 0xff) + 0x00; // ya ya I know, helps me understand whats going on
-                    j = 16;
+            if(program[i].name != InstrType::HIDDEN){
+                if(i >= program.size()){
+                    break; //uggghhh even more grose
                 }
-                checksum += (program[i].bytecode & 0xff) + ((program[i].bytecode >> 8) & 0xff);
-                printByte(program[i].bytecode & 0xff);
-                printByte((program[i].bytecode >> 8) & 0xff);
-                j-=2;
-            } else {
-                //print16inst
-                checksum += (program[i].bytecode & 0xff) + ((program[i].bytecode >> 8) & 0xff);
-                printByte(program[i].bytecode & 0xff);
-                printByte(program[i].bytecode >> 8);
-                j-=2;
+                if(program[i].is32){
+                    //print32inst
+                    checksum += ((program[i].bytecode >> 16) & 0xff) + ((program[i].bytecode >> 24) & 0xff);
+                    printByte((program[i].bytecode >> 16) & 0xff);
+                    printByte((program[i].bytecode >> 24) & 0xff);
+                    j-=2;
+                    if(!j){ //ugly but whatever
+                        printByte((~(checksum % 256) + 1)&0xff);
+                        cout << "\n";
+                        cout << ":10" << (program[i].addr+2) << "00";
+                        checksum = 0x10 + ((program[i].addr+2) >> 8) + ((program[i].addr+2) & 0xff) + 0x00; // ya ya I know, helps me understand whats going on
+                        j = 16;
+                    }
+                    checksum += (program[i].bytecode & 0xff) + ((program[i].bytecode >> 8) & 0xff);
+                    printByte(program[i].bytecode & 0xff);
+                    printByte((program[i].bytecode >> 8) & 0xff);
+                    j-=2;
+                } else {
+                    //print16inst
+                    checksum += (program[i].bytecode & 0xff) + ((program[i].bytecode >> 8) & 0xff);
+                    printByte(program[i].bytecode & 0xff);
+                    printByte(program[i].bytecode >> 8);
+                    j-=2;
+                }
             }
             i++;
         }
@@ -607,6 +918,9 @@ void printByFunction(){
     for(int i = 0; i < functions.size(); i++){
         cout << functions[i].name << endl;
         for(int j = 0; j < functions[i].body.size(); j++){
+            if(functions[i].body[j]->name == InstrType::HIDDEN){
+                continue;
+            }
             cout << setw(8) << hex << functions[i].body[j]->addr << ":";
             cout << setw(7) << " ";
             if(functions[i].body[j]->is32){
@@ -631,6 +945,9 @@ void printByFunction(){
 
 void printProgram(){
     for(int i = 0; i < program.size(); i++){
+        if(program[i].name == InstrType::HIDDEN){
+            continue;
+        }
         cout << setw(8) << hex << program[i].addr << ":";
         cout << setw(7) << " ";
         if(program[i].is32){
@@ -787,6 +1104,8 @@ void checkIfThenInstr(){
 
 void printInstr(Instruction i){
 	switch(i.name){
+        case HIDDEN :
+            break; //nothing to see here, "removed" nop most likely
 		case nop :
 			printInstrName("nop");
 			cout << endl;
@@ -1558,6 +1877,10 @@ void printInstr(Instruction i){
             break;
         case MSR:
             printInstrName("msr");
+            cout << endl;
+            break;
+        case CONST:
+            printInstrName("const");
             cout << endl;
             break;
 		default:   
