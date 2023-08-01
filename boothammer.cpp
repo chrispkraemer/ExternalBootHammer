@@ -46,6 +46,7 @@ string ifThenModifier = "";
 short int ifThenNumber = 0;
 Instruction* branchToSetup;
 Instruction* branchToLoop;
+set<string> funcNames;
 
 
 bool disas = false;
@@ -291,6 +292,7 @@ void controlFlow(){
     }
     
     functions.insert(functions.begin(), *main);
+    funcNames.insert(main->name);
 
     Function *setup = new Function("setup");
     Function *loop = new Function("loop");
@@ -298,10 +300,12 @@ void controlFlow(){
 
     int setupAddr = getProgramIndex(mainbranches[1]->imm, 0, program.size());
     //cout << hex << setupAddr << endl;
+    funcNames.insert(setup->name);
     fillFunction(setup, setupAddr);
     functions.push_back(*setup);
 
     int loopAddr = getProgramIndex(mainbranches[2]->imm, 0, program.size());
+    funcNames.insert(loop->name);
     fillFunction(loop, loopAddr);
     functions.push_back(*loop);
 
@@ -372,9 +376,11 @@ void fillChildFunction(Function* func, int startAddr){
             }
         } else if(program[pos].name == InstrType::BL){
             int newchildIndex = getProgramIndex(program[pos].imm, 0, program.size());
-            Function *newchild = new Function(to_string(newchildIndex));
-            func->children.push_back(newchild);
-            fillChildFunction(newchild, newchildIndex);
+            if(newchildIndex != startAddr){//non recursive only
+                Function *newchild = new Function(to_string(newchildIndex));
+                func->children.push_back(newchild);
+                fillChildFunction(newchild, newchildIndex);
+            }
 
         } else if(program[pos].name == InstrType::PUSH){
             pushcount++;
@@ -448,13 +454,34 @@ void addUserChecks(Function* func, set<int>*checkSet){
     if(func->name == "readRAM" || func->name == "writeRAM"){
         return;
     }
+    int firstCheckPos = -1;
+    
     for(int i = 0; i < func->body.size(); i++){
         if(func->body[i]->bytecode == 0x46c0){
-            if(func->body[i+1]->bytecode == 0x46c0){
-                checkSet->insert(getProgramIndex(func->body[i]->addr, 0 , program.size()));
-                if(func->name != "loop"){
+            if(func->body[i+1]->bytecode == 0x46c0 && func->body[i+2]->bytecode == 0x46c0){
+                bool pushed = funcNames.insert(func->name).second;
+                if(firstCheckPos < 0){
+                    firstCheckPos = i;
+                }
+                checkSet->insert(getProgramIndex(func->body[i+1]->addr, 0 , program.size()));
+                i+=2;
+                //cout << dec << func->name << endl;
+                //cout << pushed << endl;
+                if(func->name != "loop" && pushed){
                     functions.push_back(*func);
                 }
+            }
+
+        } else if(func->body[i]->name == InstrType::BX){
+            //tricky situation found by rsa, lr isn't push in subroutines that bx lr to get back to caller, but checkpoint calls BL, overwriting LR
+            //so we overwrite nop1 with push(lr) and the bx lr with pop(pc)
+            //cout << "func name: " << func->name << endl;
+            //cout << "bx found" << endl;
+            //cout << "we made it: " << dec << firstCheckPos << endl;
+            if(firstCheckPos >= 0){
+                //so we definitly inserted a checkpoint, now change the instructions
+                func->body[firstCheckPos]->decodeInstr16(0xb500);
+                func->body[i]->decodeInstr16(0xbd00);
             }
 
         }
@@ -489,8 +516,10 @@ void runOnFunction(){
                             addCheckpoints = true;
                             jumptoReadIndex = getProgramIndex(functions[i].body[j]->addr, 0, len);
                             foundfirst = true;
+                            j++;
                         } else {
                             userDefChecks.insert(getProgramIndex(functions[i].body[j]->addr, 0, len));
+                            j++;
                         }
 
                     }
@@ -510,6 +539,7 @@ void runOnFunction(){
                 if(functions[i].body[j]->bytecode == 0x46c0){
                     if(functions[i].body[j+1]->bytecode == 0x46c0){
                         readToWriteJumpAddr = functions[i].body[j]->addr;
+                        j++;
                     }
                 }
             }
@@ -520,6 +550,7 @@ void runOnFunction(){
                 if(functions[i].body[j]->bytecode == 0x46c0){
                     if(functions[i].body[j+1]->bytecode == 0x46c0){
                         readToWriteJumpIndex = getProgramIndex(functions[i].body[j]->addr, 0, len);
+                        j++;
                     }
                 }
             }
@@ -530,7 +561,7 @@ void runOnFunction(){
     }
 
     if(!addCheckpoints){
-        printHex();
+       // printHex();
         return;
     }
 
