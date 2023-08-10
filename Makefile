@@ -14,10 +14,10 @@ Function.o: Function.cpp
 	$(CXX) -c -g Function.cpp
 
 Instruction.o: Instruction.cpp
-	$(CXX) -c -g Instruction.cpp
+	$(CXX) -c  -g Instruction.cpp
 
 boothammer.o: boothammer.cpp
-	$(CXX) -c -g boothammer.cpp
+	$(CXX) -c  -g boothammer.cpp
 
 runtiny:
 	./hexBootHammer $(TINY)
